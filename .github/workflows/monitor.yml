@@ -18,6 +18,9 @@ jobs:
   monitor:
     runs-on: ubuntu-latest
     timeout-minutes: 355
+    permissions:
+      contents: read
+      actions: write   # lets the job queue the next run
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -50,3 +53,15 @@ jobs:
         with:
           path: state
           key: p2p-state-${{ github.run_id }}
+
+      # GitHub's cron is unreliable, so each run queues the next one until STOP_AFTER.
+      # Skipped when a run is cancelled or fails, so cancelling stops the chain.
+      - name: Queue next run
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$STOP_AFTER" ] || [[ "$(date -u +%F)" < "$STOP_AFTER" ]]; then
+            gh workflow run monitor.yml --ref main -f test=false
+          fi
+          
