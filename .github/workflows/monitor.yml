@@ -1,0 +1,52 @@
+name: P2P merchant monitor
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # keeps a run queued so a new job starts as soon as the last one ends
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "Send a Telegram test message on start"
+        type: boolean
+        default: true
+
+concurrency:
+  group: p2p-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      STOP_AFTER: ${{ vars.STOP_AFTER }}   # YYYY-MM-DD (UTC), set in repo Settings > Variables
+      RUN_MINUTES: "345"                    # one job = 5h45m, under GitHub's 6h job limit
+      INTERVAL_SEC: "60"
+      STATE_FILE: state/seen.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore alert memory
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: p2p-state-${{ github.run_id }}
+          restore-keys: p2p-state-
+
+      - name: Run monitor
+        run: |
+          mkdir -p state
+          python p2p_monitor.py ${{ inputs.test && '--test-telegram' || '' }}
+
+      - name: Save alert memory
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: p2p-state-${{ github.run_id }}
