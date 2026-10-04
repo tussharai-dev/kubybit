@@ -5,7 +5,8 @@ Alerts (Windows pop-up) when a merchant matches ALL of:
   1. Has at least one SELL ad (merchant sells USDT) that accepts UPI.
   2. Every SELL ad of theirs that uses IMPS / RTGS / NEFT / bank transfer has a max limit <= 1,00,000 INR.
   3. Has a BUY ad (merchant buys USDT - you sell to them) priced ABOVE 100 INR
-     that accepts UPI, IMPS or bank transfer.
+     that accepts UPI, IMPS or bank transfer, with a max limit of at least 1,00,000 INR
+     (ads above 1 lakh are starred and listed first).
 
 Run:  python p2p_monitor.py          (Ctrl+C or close the window to stop)
 Log:  p2p_monitor.log (same folder)
@@ -37,6 +38,8 @@ WINDOWS = sys.platform == "win32"
 
 INTERVAL_SEC = int(os.environ.get("INTERVAL_SEC", 60))
 MIN_BUY_PRICE = 100.0
+MIN_BUY_MAX = 100000.0  # merchant's buy ad must let you sell at least this much in one order
+RESET_ID = "2026-10-04b"  # change this to make the next cloud run resend every current match
 SELL_BANK_MAX = 100000.0
 
 UA = {"User-Agent": "Mozilla/5.0", "content-type": "application/json"}
@@ -145,14 +148,15 @@ def find_matches(platform, sells, buys):
         if any(has(a["pays"], BANK_RE) and a["max"] > SELL_BANK_MAX for a in s):
             continue
         for a in b:
-            if a["price"] > MIN_BUY_PRICE and has(a["pays"], PAYOUT_RE):
+            if a["price"] > MIN_BUY_PRICE and a["max"] >= MIN_BUY_MAX and has(a["pays"], PAYOUT_RE):
                 matches.append((platform, a, s))
     return matches
 
 
 def describe(platform, buy, sells):
     sell_txt = "; ".join(f"Rs{a['price']:g} ({'/'.join(a['pays'])}, Rs{a['min']:,.0f}-{a['max']:,.0f})" for a in sells)
-    return (f"[{platform}] {buy['name']}\n"
+    star = "⭐ " if buy["max"] > MIN_BUY_MAX else ""
+    return (f"{star}[{platform}] {buy['name']}\n"
             f"  BUYS your USDT at Rs{buy['price']:g}  |  limit Rs{buy['min']:,.0f} - {buy['max']:,.0f}\n"
             f"  Pays you via: {', '.join(buy['pays'])}\n"
             f"  Sells USDT as: {sell_txt}\n"
@@ -299,7 +303,7 @@ def main():
     run_minutes = float(os.environ.get("RUN_MINUTES", 0))
     deadline = time.time() + run_minutes * 60 if run_minutes else None
 
-    log(f"Monitor started. Checking Bybit + KuCoin every {INTERVAL_SEC}s. Buy price > {MIN_BUY_PRICE}.")
+    log(f"Monitor started. Checking Bybit + KuCoin every {INTERVAL_SEC}s. Buy price > {MIN_BUY_PRICE}, buy limit >= {MIN_BUY_MAX:,.0f}.")
     if not (os.environ.get("TELEGRAM_BOT_TOKEN") or load_config().get("telegram_bot_token")):
         log("Telegram not configured - Windows pop-ups only. Run with --setup-telegram to enable.")
     elif "--test-telegram" in sys.argv:
@@ -307,8 +311,8 @@ def main():
     seen = load_state()  # (platform, ad id, price) already alerted
     state = os.environ.get("STATE_FILE")
     delivered = Path(state).with_name("delivered.txt") if state else None
-    if delivered and not delivered.exists():
-        seen = set()  # no alert has reached Telegram yet, so don't skip anything
+    if delivered and (not delivered.exists() or delivered.read_text().strip() != RESET_ID):
+        seen = set()  # nothing delivered since the last reset, so don't skip anything
     failing = set()
     while deadline is None or time.time() < deadline:
         found = []
@@ -331,7 +335,7 @@ def main():
             new = []
             current = set(seen)
         if new:
-            new.sort(key=lambda x: -x[1]["price"])
+            new.sort(key=lambda x: (x[1]["max"] <= MIN_BUY_MAX, -x[1]["price"]))  # above 1 lakh first
             body = "\n\n".join(describe(*x) for x in new)
             log(f"{len(new)} new match(es):\n{body}")
             shown = "\n\n".join(describe(*x) for x in new[:6])
@@ -340,7 +344,7 @@ def main():
             popup("P2P: merchant you may want to trade with", shown)
             sent = telegram_send(f"🔔 Merchant(s) you may want to trade with ({len(new)} new)\n\n{body}")
             if sent and delivered:
-                delivered.write_text("1")
+                delivered.write_text(RESET_ID)
         else:
             log(f"No new matches ({len(current)} active).")
         # Keep ads still listed; ads that disappear are forgotten so they re-alert if they come back.
