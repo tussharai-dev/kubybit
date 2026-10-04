@@ -2,10 +2,10 @@
 P2P USDT/INR merchant monitor for Bybit and KuCoin.
 
 Alerts (Windows pop-up) when a merchant matches ALL of:
-  1. Has at least one SELL ad (merchant sells USDT) that accepts UPI.
+  1. Has at least one SELL ad (merchant sells USDT) that accepts UPI or Digital eRupee.
   2. Every SELL ad of theirs that uses IMPS / RTGS / NEFT / bank transfer has a max limit <= 1,00,000 INR.
   3. Has a BUY ad (merchant buys USDT - you sell to them) priced ABOVE 100 INR
-     that accepts UPI, IMPS or bank transfer, with a max limit of at least 1,00,000 INR
+     that accepts UPI, IMPS, bank transfer or Digital eRupee, with a max limit of at least 1,00,000 INR
      (ads above 1 lakh are starred and listed first).
 
 Run:  python p2p_monitor.py          (Ctrl+C or close the window to stop)
@@ -45,9 +45,9 @@ SELL_BANK_MAX = 100000.0
 UA = {"User-Agent": "Mozilla/5.0", "content-type": "application/json"}
 LOG = Path(__file__).with_name("p2p_monitor.log")
 CONFIG = Path(__file__).with_name("p2p_monitor_config.json")
-UPI_RE = re.compile(r"\bUPI\b", re.I)
+UPI_RE = re.compile(r"\bUPI\b|E.?RUPEE", re.I)  # UPI domain, incl. Digital eRupee
 BANK_RE = re.compile(r"IMPS|RTGS|NEFT|BANK.?TRANSFER", re.I)
-PAYOUT_RE = re.compile(r"\bUPI\b|IMPS|BANK.?TRANSFER", re.I)  # what you accept to receive
+PAYOUT_RE = re.compile(r"\bUPI\b|IMPS|BANK.?TRANSFER|E.?RUPEE", re.I)  # what you accept to receive
 
 
 def log(msg):
