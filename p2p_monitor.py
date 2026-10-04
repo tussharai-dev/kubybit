@@ -240,7 +240,7 @@ def telegram_send(text):
     token = os.environ.get("TELEGRAM_BOT_TOKEN") or cfg.get("telegram_bot_token")
     chat = os.environ.get("TELEGRAM_CHAT_ID") or cfg.get("telegram_chat_id") or _chat_from_updates(token)
     if not token or not chat:
-        return
+        return False
     chunks, cur = [], ""
     for part in text.split("\n\n"):  # Telegram limit is 4096 chars per message
         if len(cur) + len(part) + 2 > 3900:
@@ -248,11 +248,14 @@ def telegram_send(text):
             cur = ""
         cur += part + "\n\n"
     chunks.append(cur)
+    ok = True
     for c in chunks:
         try:
             telegram_api(token, "sendMessage", {"chat_id": chat, "text": c.strip()})
         except Exception as e:
             log(f"Telegram send failed: {e}")
+            ok = False
+    return ok
 
 
 def setup_telegram():
@@ -302,9 +305,10 @@ def main():
     elif "--test-telegram" in sys.argv:
         telegram_send("✅ P2P monitor is running in the cloud. Alerts will arrive here.")
     seen = load_state()  # (platform, ad id, price) already alerted
-    f = _chat_file()
-    if f and not f.exists() and not os.environ.get("TELEGRAM_CHAT_ID"):
-        seen = set()  # nothing has reached Telegram yet, so don't skip anything
+    state = os.environ.get("STATE_FILE")
+    delivered = Path(state).with_name("delivered.txt") if state else None
+    if delivered and not delivered.exists():
+        seen = set()  # no alert has reached Telegram yet, so don't skip anything
     failing = set()
     while deadline is None or time.time() < deadline:
         found = []
@@ -334,7 +338,9 @@ def main():
             if len(new) > 6:
                 shown += f"\n\n...and {len(new) - 6} more (see p2p_monitor.log)"
             popup("P2P: merchant you may want to trade with", shown)
-            telegram_send(f"🔔 Merchant(s) you may want to trade with ({len(new)} new)\n\n{body}")
+            sent = telegram_send(f"🔔 Merchant(s) you may want to trade with ({len(new)} new)\n\n{body}")
+            if sent and delivered:
+                delivered.write_text("1")
         else:
             log(f"No new matches ({len(current)} active).")
         # Keep ads still listed; ads that disappear are forgotten so they re-alert if they come back.
