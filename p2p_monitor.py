@@ -193,21 +193,46 @@ def telegram_api(token, method, params):
 _found_chat = {}
 
 
+def _chat_file():
+    path = os.environ.get("STATE_FILE")
+    return Path(path).with_name("chat_id.txt") if path else None
+
+
 def _chat_from_updates(token):
-    """No chat id given: use whoever last messaged the bot (send it /start once)."""
+    """No chat id given: use whoever last messaged the bot (send it /start once).
+    Telegram only keeps updates ~24h, so the id is remembered next to STATE_FILE."""
     if not token:
         return None
-    if token not in _found_chat:
-        try:
-            ups = telegram_api(token, "getUpdates", {}).get("result", [])
-            chats = [u["message"]["chat"]["id"] for u in ups if "message" in u]
-            _found_chat[token] = chats[-1] if chats else None
-            if chats:
-                log(f"Using Telegram chat id {chats[-1]} (save it as TELEGRAM_CHAT_ID to make it permanent).")
-        except Exception as e:
-            log(f"Telegram getUpdates failed: {e}")
-            return None
+    if token in _found_chat:
+        return _found_chat[token]
+    f = _chat_file()
+    if f and f.exists() and f.read_text().strip():
+        _found_chat[token] = f.read_text().strip()
+        return _found_chat[token]
+    try:
+        ups = telegram_api(token, "getUpdates", {}).get("result", [])
+    except Exception as e:
+        log(f"Telegram getUpdates failed: {e}")
+        return None
+    chats = [u["message"]["chat"]["id"] for u in ups if "message" in u]
+    if not chats:
+        log("Telegram: no chat found yet - send /start to your bot.")
+        return None
+    _found_chat[token] = str(chats[-1])
+    if f:
+        f.write_text(_found_chat[token])
+    log(f"Telegram: using chat id {chats[-1]}.")
     return _found_chat[token]
+
+
+def telegram_ready():
+    """True if alerts can go out (Telegram set up), or we're local with pop-ups."""
+    cfg = load_config()
+    token = os.environ.get("TELEGRAM_BOT_TOKEN") or cfg.get("telegram_bot_token")
+    if not token:
+        return WINDOWS
+    chat = os.environ.get("TELEGRAM_CHAT_ID") or cfg.get("telegram_chat_id") or _chat_from_updates(token)
+    return bool(chat) or WINDOWS
 
 
 def telegram_send(text):
@@ -277,6 +302,9 @@ def main():
     elif "--test-telegram" in sys.argv:
         telegram_send("✅ P2P monitor is running in the cloud. Alerts will arrive here.")
     seen = load_state()  # (platform, ad id, price) already alerted
+    f = _chat_file()
+    if f and not f.exists() and not os.environ.get("TELEGRAM_CHAT_ID"):
+        seen = set()  # nothing has reached Telegram yet, so don't skip anything
     failing = set()
     while deadline is None or time.time() < deadline:
         found = []
@@ -293,6 +321,11 @@ def main():
                     telegram_send(f"⚠️ P2P monitor can't reach {platform}: {e}")
         current = {(p, b["id"], b["price"]) for p, b, _ in found}
         new = [(p, b, s) for p, b, s in found if (p, b["id"], b["price"]) not in seen]
+        if new and not telegram_ready():
+            # Hold alerts until Telegram is reachable, so the first message isn't lost.
+            log(f"{len(new)} match(es) waiting for Telegram setup.")
+            new = []
+            current = set(seen)
         if new:
             new.sort(key=lambda x: -x[1]["price"])
             body = "\n\n".join(describe(*x) for x in new)
